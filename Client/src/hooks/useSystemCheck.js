@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { useMedia } from '../context/MediaContext'
 import { useScreenShare } from './useScreenShare'
 
-const INTERNET_THRESHOLDS = {
-  excellent: 80,
-  good: 150,
+// Latency-based quality thresholds (in milliseconds)
+const LATENCY_THRESHOLDS = {
+  good: 300,      // < 300ms = Good connection
+  average: 1000,  // 300-1000ms = Average/Slow connection
+  // > 1000ms = Very slow (but still connected)
 }
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:9000/api'
 
 export const useSystemCheck = () => {
   const {
@@ -39,29 +39,66 @@ export const useSystemCheck = () => {
     }
   }, [screenError])
 
+  /**
+   * Check internet connectivity using navigator.onLine + lightweight fetch
+   * Does NOT depend on backend API for status
+   * Returns: 'connected' (any speed), 'slow' (>1s latency), or 'offline'
+   */
   const testInternet = useCallback(async () => {
     setInternetStatus('checking')
     setLastPingMs(null)
+
+    // First check: Use navigator.onLine for basic connectivity
+    if (!navigator.onLine) {
+      setInternetStatus('offline')
+      return
+    }
+
+    // Second check: Perform latency test using lightweight resource
     try {
       const start = performance.now()
-      const response = await fetch(`${API_URL}/health`, {
-        cache: 'no-store',
-      })
-      if (!response.ok) {
-        throw new Error('Health check failed')
-      }
+      
+      // Use Google's 1x1 transparent pixel with no-cors mode
+      // This is a lightweight, widely-available resource
+      const response = await Promise.race([
+        fetch('https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png', {
+          method: 'HEAD',
+          mode: 'no-cors',
+          cache: 'no-store',
+        }),
+        // Timeout after 10 seconds
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 10000)
+        ),
+      ])
+
       const elapsed = Math.round(performance.now() - start)
       setLastPingMs(elapsed)
 
-      if (elapsed < INTERNET_THRESHOLDS.excellent) {
-        setInternetStatus('excellent')
-      } else if (elapsed < INTERNET_THRESHOLDS.good) {
+      // Classify connection quality based on latency
+      if (elapsed < LATENCY_THRESHOLDS.good) {
         setInternetStatus('good')
+      } else if (elapsed < LATENCY_THRESHOLDS.average) {
+        setInternetStatus('average')
       } else {
-        setInternetStatus('poor')
+        // Still connected, just slow
+        setInternetStatus('slow')
       }
     } catch (err) {
-      setInternetStatus('poor')
+      console.warn('Internet latency check failed:', err.message)
+      
+      // If navigator.onLine is true but fetch failed, could be:
+      // - DNS issue
+      // - Captive portal
+      // - Poor connectivity
+      // But we're still connected enough to potentially interview
+      
+      if (navigator.onLine) {
+        // Device is online but check failed - assume poor but connected
+        setInternetStatus('poor')
+      } else {
+        setInternetStatus('offline')
+      }
     }
   }, [])
 
@@ -119,8 +156,43 @@ export const useSystemCheck = () => {
     return () => clearInterval(monitoringInterval)
   }, [cameraStream, microphoneTrack])
 
-  const internetOk = internetStatus === 'excellent' || internetStatus === 'good'
-  const canStart = cameraReady && micReady && screenReady && internetOk && !permissionLost
+  /**
+   * Connection is OK if:
+   * - User is online (any speed: good, average, slow, or poor)
+   * - NOT offline
+   */
+  const isOnline = internetStatus !== 'offline' && internetStatus !== 'checking'
+  
+  /**
+   * Can start interview if:
+   * - Camera and microphone are ready
+   * - Screen sharing is ready (if applicable)
+   * - User is online (even if slow - don't block based on latency)
+   * - No permission was lost
+   */
+  const canStart = cameraReady && micReady && screenReady && isOnline && !permissionLost
+
+  /**
+   * Get user-friendly connection message
+   */
+  const getConnectionMessage = () => {
+    switch (internetStatus) {
+      case 'offline':
+        return '✗ No Internet Connection'
+      case 'checking':
+        return '⏳ Checking Connection...'
+      case 'good':
+        return `✓ Good Connection (${lastPingMs}ms)`
+      case 'average':
+        return `⚠ Average Connection (${lastPingMs}ms)`
+      case 'slow':
+        return `⚠ Slow Connection (${lastPingMs}ms)`
+      case 'poor':
+        return '⚠ Poor Connection (Unable to check speed)'
+      default:
+        return 'Unknown'
+    }
+  }
 
   return {
     cameraStream,
@@ -134,6 +206,8 @@ export const useSystemCheck = () => {
     errorMessage,
     permissionLost,
     canStart,
+    isOnline,
+    getConnectionMessage,
     setErrorMessage,
     testInternet,
     checkCameraAndMic,

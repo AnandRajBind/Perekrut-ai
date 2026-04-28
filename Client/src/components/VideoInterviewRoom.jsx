@@ -13,18 +13,35 @@ import InterviewProgress from './InterviewProgress'
 import InterviewAnswerControls from './InterviewAnswerControls'
 import { useInterviewSession } from '../hooks/useInterviewSession'
 import { useMedia } from '../context/MediaContext'
+import { useSystemCheck } from '../hooks/useSystemCheck'
 
 const VideoInterviewRoom = () => {
   const { token } = useParams()
   const navigate = useNavigate()
   const { cameraStream } = useMedia()
+  const { internetStatus, lastPingMs } = useSystemCheck()
 
   const [isLoading, setIsLoading] = useState(true)
   const [interviewData, setInterviewData] = useState(null)
   const [isMicEnabled, setIsMicEnabled] = useState(true)
   const [isVideoEnabled, setIsVideoEnabled] = useState(true)
   const [isRecording, setIsRecording] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState('good')
+  
+  // Map internal internet status to UI status
+  const connectionStatus = (() => {
+    switch (internetStatus) {
+      case 'good':
+        return 'good'
+      case 'average':
+      case 'slow':
+        return 'fair'
+      case 'poor':
+      case 'offline':
+        return 'poor'
+      default:
+        return 'checking'
+    }
+  })()
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [countdown, setCountdown] = useState(5)
   const mediaRecorderRef = useRef(null)
@@ -219,16 +236,16 @@ const VideoInterviewRoom = () => {
     }, 1000)
   }
 
-  // Simulate connection status change
+  // Monitor internet connection quality in real-time
+  // Connection status automatically updates via useSystemCheck hook
   useEffect(() => {
-    const interval = setInterval(() => {
-      const statuses = ['good', 'good', 'fair']
-      const random = statuses[Math.floor(Math.random() * statuses.length)]
-      setConnectionStatus(random)
-    }, 5000)
-
-    return () => clearInterval(interval)
-  }, [])
+    if (connectionStatus === 'poor') {
+      toast.warning('Your internet connection is slow. The interview may experience delays.', {
+        position: 'top-right',
+        autoClose: 5000,
+      })
+    }
+  }, [connectionStatus])
 
   if (isLoading) {
     return (
