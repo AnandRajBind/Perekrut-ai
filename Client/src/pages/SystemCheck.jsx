@@ -60,7 +60,9 @@ const SystemCheck = () => {
 
   useEffect(() => {
     testInternet()
-  }, [testInternet])
+    // Only run once on mount, not on every testInternet change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const statusBadge = (ready) => (
     <span

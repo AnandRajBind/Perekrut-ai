@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { useMedia } from '../context/MediaContext'
 import { useScreenShare } from './useScreenShare'
 
@@ -8,6 +8,14 @@ const LATENCY_THRESHOLDS = {
   average: 1000,  // 300-1000ms = Average/Slow connection
   // > 1000ms = Very slow (but still connected)
 }
+
+// Multiple fallback endpoints for reliability
+const CONNECTIVITY_TEST_URLS = [
+  'https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png',
+  'https://www.cloudflare.com/',
+  'https://www.github.com/',
+  'https://www.amazon.com/',
+]
 
 export const useSystemCheck = () => {
   const {
@@ -31,6 +39,11 @@ export const useSystemCheck = () => {
   const [lastPingMs, setLastPingMs] = useState(null)
   const [permissionLost, setPermissionLost] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  
+  // Track last successful test to avoid status downgrades
+  const lastSuccessfulStatus = useRef(null)
+  const lastTestTime = useRef(null)
+  const MIN_TEST_INTERVAL = 30000 // Don't test more than every 30 seconds
 
   // Use screen error if available
   useEffect(() => {
@@ -41,66 +54,117 @@ export const useSystemCheck = () => {
 
   /**
    * Check internet connectivity using navigator.onLine + lightweight fetch
-   * Does NOT depend on backend API for status
-   * Returns: 'connected' (any speed), 'slow' (>1s latency), or 'offline'
+   * Uses multiple fallback URLs for reliability
+   * Implements debouncing to avoid too-frequent tests
+   * Does NOT downgrade from good status on transient failures
    */
   const testInternet = useCallback(async () => {
+    // Debounce: Don't test more than once every 30 seconds
+    const now = Date.now()
+    if (lastTestTime.current && now - lastTestTime.current < MIN_TEST_INTERVAL) {
+      // Return last known status without re-testing
+      if (lastSuccessfulStatus.current) {
+        setInternetStatus(lastSuccessfulStatus.current)
+      }
+      return
+    }
+    lastTestTime.current = now
+
     setInternetStatus('checking')
     setLastPingMs(null)
 
     // First check: Use navigator.onLine for basic connectivity
     if (!navigator.onLine) {
       setInternetStatus('offline')
+      lastSuccessfulStatus.current = null
       return
     }
 
-    // Second check: Perform latency test using lightweight resource
-    try {
-      const start = performance.now()
-      
-      // Use Google's 1x1 transparent pixel with no-cors mode
-      // This is a lightweight, widely-available resource
-      const response = await Promise.race([
-        fetch('https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png', {
+    // Second check: Try multiple endpoints for reliability
+    let lastError = null
+    
+    for (const url of CONNECTIVITY_TEST_URLS) {
+      try {
+        const start = performance.now()
+        
+        // Try to fetch with a short timeout
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000)
+        
+        const response = await fetch(url, {
           method: 'HEAD',
           mode: 'no-cors',
           cache: 'no-store',
-        }),
-        // Timeout after 10 seconds
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Timeout')), 10000)
-        ),
-      ])
+          signal: controller.signal,
+        })
 
-      const elapsed = Math.round(performance.now() - start)
-      setLastPingMs(elapsed)
+        clearTimeout(timeoutId)
 
-      // Classify connection quality based on latency
-      if (elapsed < LATENCY_THRESHOLDS.good) {
-        setInternetStatus('good')
-      } else if (elapsed < LATENCY_THRESHOLDS.average) {
-        setInternetStatus('average')
-      } else {
-        // Still connected, just slow
-        setInternetStatus('slow')
-      }
-    } catch (err) {
-      console.warn('Internet latency check failed:', err.message)
-      
-      // If navigator.onLine is true but fetch failed, could be:
-      // - DNS issue
-      // - Captive portal
-      // - Poor connectivity
-      // But we're still connected enough to potentially interview
-      
-      if (navigator.onLine) {
-        // Device is online but check failed - assume poor but connected
-        setInternetStatus('poor')
-      } else {
-        setInternetStatus('offline')
+        const elapsed = Math.round(performance.now() - start)
+        setLastPingMs(elapsed)
+
+        // Successfully got a response - classify connection quality
+        let status = 'good'
+        if (elapsed < LATENCY_THRESHOLDS.good) {
+          status = 'good'
+        } else if (elapsed < LATENCY_THRESHOLDS.average) {
+          status = 'average'
+        } else {
+          status = 'slow'
+        }
+        
+        setInternetStatus(status)
+        lastSuccessfulStatus.current = status
+        return // Success - exit
+      } catch (err) {
+        lastError = err
+        // Try next URL
+        continue
       }
     }
+
+    // All URLs failed - check navigator.onLine again
+    if (navigator.onLine) {
+      // Device is online but all tests failed
+      // Keep last successful status if available, otherwise mark as poor
+      if (lastSuccessfulStatus.current) {
+        setInternetStatus(lastSuccessfulStatus.current)
+      } else {
+        setInternetStatus('poor')
+        lastSuccessfulStatus.current = 'poor'
+      }
+    } else {
+      setInternetStatus('offline')
+      lastSuccessfulStatus.current = null
+    }
   }, [])
+
+  // Monitor online/offline status changes
+  useEffect(() => {
+    const handleOnline = () => {
+      // Reset test timer so it tests immediately
+      lastTestTime.current = null
+      testInternet()
+    }
+
+    const handleOffline = () => {
+      setInternetStatus('offline')
+      lastSuccessfulStatus.current = null
+    }
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [testInternet])
+
+  // Test internet on component mount only (not on every testInternet change)
+  useEffect(() => {
+    testInternet()
+  }, [testInternet])
 
   const checkCameraAndMic = useCallback(async () => {
     setErrorMessage('')
