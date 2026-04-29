@@ -19,14 +19,22 @@ const MockInterviewResults = () => {
     const savedStudentInfo = localStorage.getItem('studentInfo')
     const savedInterviewData = localStorage.getItem('interviewData')
 
-    if (!savedInterview || !savedAnswers) {
+    if (!savedInterview && !savedInterviewData) {
       setError('Interview data not found. Please complete the interview first.')
       setLoading(false)
       return
     }
 
-    setInterviewData(JSON.parse(savedInterview))
+    // Get interview data - try both locations
+    const interview = JSON.parse(savedInterview || savedInterviewData || '{}')
+    setInterviewData(interview)
     setStudentInfo(JSON.parse(savedStudentInfo || '{}'))
+    
+    // Store interview ID if available for later API calls
+    if (interview.interviewId) {
+      sessionStorage.setItem('lastMockInterviewId', interview.interviewId)
+    }
+    
     setLoading(false)
   }, [])
 
@@ -237,8 +245,78 @@ const MockInterviewResults = () => {
       const savedInterviewData = localStorage.getItem('interviewData')
       const interviewData = JSON.parse(savedInterviewData || '{}')
 
+      // ===== CRITICAL FIX: Try to fetch results from backend first =====
+      // For mock interviews submitted via the public flow, fetch real backend results
+      if (interviewData?.interviewId && interviewData.interviewId !== 'mock-interview') {
+        try {
+          const resultResponse = await fetch(
+            `${import.meta.env.VITE_API_URL}/mock/result/${interviewData.interviewId}`
+          )
+
+          if (resultResponse.ok) {
+            const resultData = await resultResponse.json()
+            // Transform backend result to match expected format
+            const backendResult = resultData.data
+            
+            // Create evaluated questions with scores
+            const evaluatedQuestions = backendResult.evaluations.map((evaluation) => ({
+              index: evaluation.questionIndex,
+              question: interviewData.questions?.[evaluation.questionIndex] || 'Question',
+              answer: backendResult.answers?.[evaluation.questionIndex]?.content || '',
+              score: evaluation.score,
+              strengths: evaluation.strengths,
+              weaknesses: evaluation.weaknesses,
+              suggestions: evaluation.suggestions,
+              modelAnswer: evaluation.modelAnswer,
+            }))
+
+            const transformedResults = {
+              overallScore: Math.round(backendResult.overallScore * 10), // Convert to /100 scale
+              performanceLevel:
+                backendResult.overallScore >= 8
+                  ? 'Excellent'
+                  : backendResult.overallScore >= 7
+                  ? 'Good'
+                  : backendResult.overallScore >= 6
+                  ? 'Average'
+                  : 'Needs Improvement',
+              scores: {
+                technicalKnowledge: Math.round(backendResult.overallScore * 10),
+                communication: Math.round(backendResult.overallScore * 10),
+                problemSolving: Math.round(backendResult.overallScore * 10),
+                confidence: Math.round(backendResult.overallScore * 10),
+              },
+              summary: `You scored ${Math.round(backendResult.overallScore * 10)}/100 in your mock interview. ${backendResult.overallFeedback?.strengths || ''}`,
+              feedback: `
+Technical: ${backendResult.overallFeedback?.strengths || 'Good attempt'}
+
+Communication: Your explanation and articulation were clear.
+
+Problem Solving: ${backendResult.overallFeedback?.suggestions || 'Keep practicing'}
+
+Feedback: ${backendResult.overallFeedback?.weaknesses || 'Room for improvement'}
+              `,
+              improvements: [
+                backendResult.overallFeedback?.suggestions || 'Keep practicing mock interviews',
+                'Review the model answers provided',
+                'Focus on areas marked for improvement',
+              ].filter(Boolean),
+              evaluations: evaluatedQuestions,
+              fullResult: backendResult, // Store full result for detailed display
+            }
+
+            setResults(transformedResults)
+            setEvaluating(false)
+            return
+          }
+        } catch (backendError) {
+          console.warn('Could not fetch backend results, falling back to local evaluation:', backendError)
+          // Fall through to local evaluation
+        }
+      }
+
       // For public mock interviews, evaluate answers locally based on content
-      if (!interviewData.interviewId || interviewData.interviewId === 'mock-interview') {
+      if (!interviewData?.interviewId || interviewData.interviewId === 'mock-interview') {
         // Evaluate locally based on answer content analysis
         const results = evaluateAnswersLocally()
         setResults(results)

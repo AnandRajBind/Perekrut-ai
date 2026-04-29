@@ -504,15 +504,74 @@ const PublicInterviewScreen = ({ isPublicMock = false, onComplete = null }) => {
 
         // For public mock interviews with callback
         if (isPublicMock && onComplete) {
-          toast.success('Interview submitted successfully!', {
-            position: 'top-right',
-            autoClose: 1500,
-          })
-          setTimeout(() => {
+          try {
+            setSubmitting(true)
+            
+            // For public mock interviews, also save to backend if we have interviewId
+            if (interviewData?.interviewId) {
+              // ===== CRITICAL FIX: Submit ALL unanswered questions before completing =====
+              const totalQuestions = interviewData.questions.length
+              
+              // Submit all answers that haven't been submitted yet
+              for (let idx = 0; idx < totalQuestions; idx++) {
+                const answer = answers[idx]
+                if (answer && answer.content && answer.content.trim()) {
+                  try {
+                    await fetch(`${import.meta.env.VITE_API_URL}/mock/answer`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        interviewId: interviewData.interviewId,
+                        questionIndex: idx,
+                        answer: answer.content,
+                        format: answer.type || answer.format || 'text',
+                      }),
+                    })
+                    console.log(`Submitted answer for question ${idx + 1}`)
+                  } catch (error) {
+                    console.warn(`Failed to submit answer for question ${idx + 1}:`, error)
+                    // Continue submitting other answers
+                  }
+                }
+              }
+
+              // Complete interview via backend
+              const completeResponse = await fetch(
+                `${import.meta.env.VITE_API_URL}/mock/complete/${interviewData.interviewId}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                }
+              )
+
+              if (!completeResponse.ok) {
+                console.warn('Failed to complete interview on backend, continuing with local state')
+              }
+            }
+
+            toast.success('Interview submitted successfully!', {
+              position: 'top-right',
+              autoClose: 1500,
+            })
+            
+            // Save answers to localStorage for fallback
+            localStorage.setItem('interviewAnswers', JSON.stringify(answers))
+            
+            setTimeout(() => {
+              setSubmitting(false)
+              onComplete()
+            }, 1500)
+            return
+          } catch (error) {
+            console.error('Error in public mock interview submission:', error)
+            toast.warning('Interview submitted locally (backend sync failed)', {
+              position: 'top-right',
+              autoClose: 2000,
+            })
             setSubmitting(false)
             onComplete()
-          }, 1500)
-          return
+            return
+          }
         }
 
         // For authenticated interviews, submit to backend with retry
