@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useCallback } from 'react'
 import { authService } from '../services/authService'
+import subscriptionSync from '../utils/subscriptionSync'
 
 export const AuthContext = createContext()
 
@@ -22,6 +23,19 @@ export const AuthProvider = ({ children }) => {
       }
     }
     setLoading(false)
+  }, [])
+
+  // Subscribe to subscription changes to keep company state in sync
+  useEffect(() => {
+    const unsubscribe = subscriptionSync.subscribe((companyData) => {
+      if (companyData) {
+        setCompany(companyData)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   const register = useCallback(async (name, email, password, confirmPassword, companyName, industry) => {
@@ -75,6 +89,15 @@ export const AuthProvider = ({ children }) => {
     setError(null)
   }, [])
 
+  const updateCompany = useCallback((updatedCompanyData) => {
+    if (updatedCompanyData) {
+      localStorage.setItem('company', JSON.stringify(updatedCompanyData))
+      setCompany(updatedCompanyData)
+      // Notify subscription sync listeners
+      subscriptionSync.notifySubscriptionChanged(updatedCompanyData)
+    }
+  }, [])
+
   const isAuthenticated = !!company
 
   return (
@@ -86,6 +109,7 @@ export const AuthProvider = ({ children }) => {
         register,
         login,
         logout,
+        updateCompany,
         isAuthenticated,
       }}
     >
@@ -93,3 +117,4 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   )
 }
+

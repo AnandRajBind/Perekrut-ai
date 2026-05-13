@@ -4,7 +4,12 @@ import { Link } from 'react-router-dom'
 import { useTrialStatus } from '../hooks/useTrialStatus'
 
 const TrialBanner = () => {
-  const { isActive, daysRemaining, isExpired } = useTrialStatus()
+  const { isActive, daysRemaining, isExpired, isSubscriptionActive, currentPlan } = useTrialStatus()
+
+  // Hide banner if subscription is active (regardless of trial status)
+  if (isSubscriptionActive) {
+    return null
+  }
 
   // Show expired banner
   if (isExpired) {

@@ -5,6 +5,7 @@ import AdminLayout from '../components/AdminLayout'
 import StatsCard from '../components/StatsCard'
 import TrialBanner from '../components/TrialBanner'
 import { useTrialStatus } from '../hooks/useTrialStatus'
+import subscriptionSync from '../utils/subscriptionSync'
 
 const AdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -14,7 +15,8 @@ const AdminDashboard = () => {
   })
   const [interviews, setInterviews] = useState([])
   const [loading, setLoading] = useState(true)
-  const { isExpired } = useTrialStatus()
+  const { isExpired, isSubscriptionActive } = useTrialStatus()
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -72,6 +74,19 @@ const AdminDashboard = () => {
     const refreshInterval = setInterval(fetchDashboardData, 30000) // 30 seconds
 
     return () => clearInterval(refreshInterval)
+  }, [refreshTrigger])
+
+  // Subscribe to subscription changes to refetch data
+  useEffect(() => {
+    const unsubscribe = subscriptionSync.subscribe(() => {
+      setLoading(true)
+      // Trigger a refetch by updating the refresh trigger
+      setRefreshTrigger((prev) => prev + 1)
+    })
+
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   return (
@@ -86,7 +101,7 @@ const AdminDashboard = () => {
             <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-gray-600 mt-1">Welcome to your company interview dashboard</p>
           </div>
-          {isExpired ? (
+          {isExpired && !isSubscriptionActive ? (
             <Link
               to="/dashboard/billing"
               className="inline-flex items-center justify-center gap-2 bg-red-600 text-white px-6 py-2.5 rounded-lg hover:bg-red-700 transition font-medium"
@@ -138,7 +153,7 @@ const AdminDashboard = () => {
           ) : interviews.length === 0 ? (
             <div className="p-6 text-center text-gray-500">
               No interviews yet. <br />
-              {isExpired ? (
+              {isExpired && !isSubscriptionActive ? (
                 <Link
                   to="/dashboard/billing"
                   className="text-red-600 hover:underline font-medium"
@@ -220,7 +235,7 @@ const AdminDashboard = () => {
         {/* Quick Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className={`rounded-lg p-6 border transition ${
-            isExpired
+            isExpired && !isSubscriptionActive
               ? 'bg-gradient-to-br from-red-50 to-rose-50 border-red-200 opacity-75'
               : 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200'
           }`}>
@@ -228,7 +243,7 @@ const AdminDashboard = () => {
             <p className="text-gray-600 text-sm mb-4">
               Create reusable interview templates for different roles and levels
             </p>
-            {isExpired ? (
+            {isExpired && !isSubscriptionActive ? (
               <div className="flex items-center gap-2">
                 <Lock size={16} className="text-red-600" />
                 <Link

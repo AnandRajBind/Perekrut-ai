@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Check, Calendar, AlertCircle, CreditCard } from 'lucide-react'
 import { toast } from 'react-toastify'
 import AdminLayout from '../components/AdminLayout'
+import subscriptionSync from '../utils/subscriptionSync'
 import {
   loadRazorpayScript,
   createPaymentOrder,
@@ -21,13 +22,24 @@ const AdminBilling = () => {
   useEffect(() => {
     fetchCompanyData()
     loadPaymentGateway()
+
+    // Subscribe to subscription changes
+    const unsubscribe = subscriptionSync.subscribe((companyData) => {
+      if (companyData) {
+        setCompany(companyData)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   const fetchCompanyData = async () => {
     try {
-      const companyData = localStorage.getItem('company')
+      const companyData = subscriptionSync.getLatestCompanyData()
       if (companyData) {
-        setCompany(JSON.parse(companyData))
+        setCompany(companyData)
       }
     } catch (error) {
       toast.error('Failed to load billing information', {
@@ -78,6 +90,10 @@ const AdminBilling = () => {
     return today < endDate && company.isTrialActive
   }
 
+  const isSubscriptionActive = () => {
+    return subscriptionSync.isSubscriptionActive(company)
+  }
+
   const handlePlanSelect = async (planId, planName) => {
     if (!company || !localStorage.getItem('token')) return
 
@@ -98,10 +114,10 @@ const AdminBilling = () => {
           // Step 3: Verify payment with backend
           const result = await verifyPaymentSignature(paymentData, token)
 
-          // Update company data
+          // Step 4: Update company data and notify all subscribers
           if (result.company) {
-            localStorage.setItem('company', JSON.stringify(result.company))
-            setCompany(result.company)
+            // This will update localStorage and notify all listeners
+            subscriptionSync.notifySubscriptionChanged(result.company)
           }
 
           toast.success(`Successfully upgraded to ${planName} plan! 🎉`, {
@@ -223,10 +239,23 @@ const AdminBilling = () => {
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Current Plan</h2>
                 <p className="text-gray-600 mt-1">
-                  You are currently on the <span className="font-semibold">{company.plan || 'Trial'}</span> plan
+                  You are currently on the <span className="font-semibold">
+                    {isSubscriptionActive() ? company.plan : company.plan || 'Trial'}
+                  </span> plan
                 </p>
               </div>
-              {isTrialActive() && (
+              {isSubscriptionActive() && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-lg">
+                  <Check className="text-green-600" size={20} />
+                  <div>
+                    <p className="text-sm font-semibold text-green-900">Subscription Active</p>
+                    <p className="text-xs text-green-700">
+                      Until {new Date(company.subscriptionEndDate).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {isTrialActive() && !isSubscriptionActive() && (
                 <div className="flex items-center gap-2 px-4 py-2 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <AlertCircle className="text-yellow-600" size={20} />
                   <div>
@@ -240,7 +269,7 @@ const AdminBilling = () => {
             </div>
 
             {/* Trial Info */}
-            {isTrialActive() && (
+            {isTrialActive() && !isSubscriptionActive() && (
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
@@ -290,7 +319,7 @@ const AdminBilling = () => {
         )}
 
         {/* Upgrade Prompt */}
-        {isTrialActive() && (
+        {isTrialActive() && !isSubscriptionActive() && (
           <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200 p-6 md:p-8">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div>
@@ -352,9 +381,9 @@ const AdminBilling = () => {
                   {/* CTA Button */}
                   <button
                     onClick={() => handlePlanSelect(plan.id, plan.name)}
-                    disabled={processingPlan === plan.id || company?.plan === plan.id}
+                    disabled={processingPlan === plan.id || (company?.plan === plan.id && isSubscriptionActive())}
                     className={`w-full py-3 rounded-lg font-medium transition mb-6 ${
-                      company?.plan === plan.id
+                      company?.plan === plan.id && isSubscriptionActive()
                         ? 'bg-green-100 text-green-800 border border-green-300'
                         : plan.highlighted
                         ? 'bg-primary text-white hover:bg-primary/90 disabled:opacity-50'
@@ -363,7 +392,7 @@ const AdminBilling = () => {
                   >
                     {processingPlan === plan.id
                       ? 'Processing...'
-                      : company?.plan === plan.id
+                      : company?.plan === plan.id && isSubscriptionActive()
                       ? '✓ Current Plan'
                       : plan.cta}
                   </button>
